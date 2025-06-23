@@ -11,3 +11,4 @@ streamlit-authenticator>=0.3.0
 pyyaml>=6.0.1
 python-dotenv>=1.0.1
 streamlit-aggrid>=1.1.5.post1
+scikit-learn>=1.7.0
