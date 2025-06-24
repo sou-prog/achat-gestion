@@ -17,28 +17,31 @@ from pptx import Presentation
 from pptx.util import Inches
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import time
 import uuid
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Check required environment variables
-required_env_vars = ["SMTP_SERVER", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "NOTIFICATION_RECIPIENT", "SUPABASE_URL", "SUPABASE_KEY"]
+required_env_vars = ["SUPABASE_URL", "SUPABASE_KEY"]
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
     st.error(f"Variables d'environnement manquantes : {', '.join(missing_vars)}. Vérifiez le fichier .env.")
     st.stop()
 
-# Configuration de la page
-st.set_page_config(page_title="Indirect Purchases Dashboard", layout="wide", initial_sidebar_state="expanded")
+# Check optional SMTP variables
+smtp_vars = ["SMTP_SERVER", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "NOTIFICATION_RECIPIENT"]
+smtp_available = all(os.getenv(var) for var in smtp_vars)
 
-# Initialisation du client Supabase
+# Initialize Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Définir les styles dynamiquement
+# Configure page
+st.set_page_config(page_title="Indirect Purchases Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+# Define theme styles
 def set_theme(theme):
     if theme == "Dark":
         st.markdown(
@@ -184,7 +187,7 @@ def set_theme(theme):
             unsafe_allow_html=True
         )
 
-# Traductions
+# Translations
 translations = {
     "fr": {
         "title": "Tableau de Bord Achats Indirects",
@@ -326,18 +329,18 @@ translations = {
     }
 }
 
-# Sélecteur de langue
+# Language selector
 lang = st.sidebar.selectbox("Langue / Language", ["Français", "English"], key="lang_select")
 lang_key = "fr" if lang == "Français" else "en"
 t = translations[lang_key]
 
-# Gestion de l'authentification
+# Authentication management
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_email = None
     st.session_state.login_message = None
 
-# Écran de connexion
+# Login screen
 with st.sidebar:
     st.subheader(t["login"])
     login_placeholder = st.empty()
@@ -364,23 +367,22 @@ with st.sidebar:
         if st.button(t["logout_button"], key="logout_btn"):
             try:
                 supabase.auth.sign_out()
-                st.sessionევ
                 st.session_state.logged_in = False
                 st.session_state.user_email = None
                 login_placeholder.success("Déconnexion réussie !")
             except Exception as e:
                 login_placeholder.error(f"Erreur lors de la déconnexion : {str(e)}")
 
-# Vérifier si l'utilisateur est connecté
+# Check if user is logged in
 if not st.session_state.logged_in:
     st.warning(t["please_login"])
     st.stop()
 
-# Sélecteur de thème
+# Theme selector
 theme = st.sidebar.selectbox(t["theme"], ["Dark", "Light"], key="theme_select")
 set_theme(theme)
 
-# Sélecteur de palette de couleurs
+# Color scheme selector
 color_scheme = st.sidebar.selectbox(t["color_scheme"], ["Plotly", "Viridis", "Cividis", "Inferno"], key="color_scheme")
 color_schemes = {
     "Plotly": px.colors.qualitative.Plotly,
@@ -389,16 +391,15 @@ color_schemes = {
     "Inferno": px.colors.sequential.Inferno
 }
 
-# Fonction d'envoi d'e-mail
+# Send email function
 def send_email(subject, body, to_email):
+    if not smtp_available:
+        st.error("⚠️ Configuration SMTP manquante. Vérifiez le fichier .env.")
+        return False
     smtp_server = os.getenv("SMTP_SERVER")
     smtp_port = os.getenv("SMTP_PORT")
     smtp_username = os.getenv("SMTP_USERNAME")
     smtp_password = os.getenv("SMTP_PASSWORD")
-
-    if not all([smtp_server, smtp_port, smtp_username, smtp_password, to_email]):
-        st.error("⚠️ Configuration SMTP ou destinataire manquant. Vérifiez le fichier .env.")
-        return False
 
     msg = MIMEMultipart()
     msg['From'] = smtp_username
@@ -416,12 +417,12 @@ def send_email(subject, body, to_email):
         st.error(f"⚠️ Erreur lors de l'envoi de l'email : {str(e)}")
         return False
 
-# Fonction pour vérifier alertes
+# Check alerts function
 def check_alerts(df_contracts, df_po, df_pt):
-    to_email = os.getenv("NOTIFICATION_RECIPIENT")
-    if not to_email:
-        st.error("⚠️ Destinataire des notifications non configuré dans le fichier .env.")
+    if not smtp_available:
+        st.error("⚠️ Destinataire des notifications ou configuration SMTP non configuré dans le fichier .env.")
         return 0
+    to_email = os.getenv("NOTIFICATION_RECIPIENT")
     notifications_sent = 0
 
     for index, row in df_contracts.iterrows():
@@ -461,18 +462,15 @@ def check_alerts(df_contracts, df_po, df_pt):
 
     return notifications_sent
 
-# Charger données depuis Supabase
+# Load data from Supabase
 @st.cache_data
-def load_data(table_name, required_cols, _placeholder):
+def load_data(table_name, required_cols, _placeholder=None):
     try:
-        _placeholder.write(f"Chargement de la table {table_name}...")
         response = supabase.table(table_name).select("*").execute()
         if not response.data:
-            _placeholder.error(f"Aucune donnée trouvée dans la table {table_name}. Vérifiez si la table existe et contient des données.")
-            return pd.DataFrame(columns=required_cols)
+            return pd.DataFrame(columns=required_cols), f"Aucune donnée trouvée dans la table {table_name}. Vérifiez si la table existe et contient des données."
         df = pd.DataFrame(response.data)
         actual_cols = df.columns.tolist()
-        _placeholder.write(f"Colonnes trouvées dans {table_name}: {actual_cols}")
         column_mapping = {
             'po_number': 'PO_NUMBER',
             'fournisseur': 'FOURNISSEUR',
@@ -496,18 +494,16 @@ def load_data(table_name, required_cols, _placeholder):
         df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns}, inplace=True)
         missing_cols = [col for col in required_cols if col not in df.columns and col.lower() not in [c.lower() for c in df.columns]]
         if missing_cols:
-            _placeholder.warning(f"Colonnes manquantes dans {table_name}: {missing_cols}. Colonnes disponibles: {actual_cols}. Retour d'un DataFrame vide.")
-            return pd.DataFrame(columns=required_cols)
+            return pd.DataFrame(columns=required_cols), f"Colonnes manquantes dans {table_name}: {missing_cols}. Colonnes disponibles: {actual_cols}"
         for col in df.columns:
             for req_col in required_cols:
                 if col.lower() == req_col.lower() and col != req_col:
                     df.rename(columns={col: req_col}, inplace=True)
-        return df
+        return df, None
     except Exception as e:
-        _placeholder.error(f"⚠️ Erreur lors du chargement de {table_name}: {str(e)}")
-        return pd.DataFrame(columns=required_cols)
+        return pd.DataFrame(columns=required_cols), f"⚠️ Erreur lors du chargement de {table_name}: {str(e)}"
 
-# Exporter graphique en PNG
+# Export Plotly figure as PNG
 def export_plotly_figure(fig, filename):
     if fig is not None:
         img_bytes = fig.to_image(format="png")
@@ -517,7 +513,7 @@ def export_plotly_figure(fig, filename):
     else:
         st.warning("⚠️ Aucune figure disponible pour l'exportation.")
 
-# Exporter vers PowerPoint
+# Export to PowerPoint
 def export_to_ppt(df_po_filtered, df_pt_filtered, df_contracts_filtered, figs):
     prs = Presentation()
     
@@ -570,15 +566,48 @@ def export_to_ppt(df_po_filtered, df_pt_filtered, df_contracts_filtered, figs):
     ppt_buffer.seek(0)
     return ppt_buffer
 
-# Configuration principale
+# Function to get SQLite connection
+def get_sqlite_connection():
+    conn = sqlite3.connect('comments.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS comments (
+            id TEXT,
+            type TEXT,
+            comment TEXT,
+            user TEXT,
+            timestamp TEXT
+        )
+    ''')
+    conn.commit()
+    return conn, cursor
+
+# Main configuration
 st.title(t["title"])
 
-# Charger les données depuis Supabase
+# Load data from Supabase
 loading_placeholder = st.empty()
 with st.spinner(t["loading"]):
-    df_po = load_data("purchase_orders", ["PO_NUMBER", "FOURNISSEUR", "DEPARTEMENT", "MONTANT_EUR", "QUANTITE", "DATE", "TYPE_ACHAT", "STATUT"], loading_placeholder)
-    df_pt = load_data("payment_terms", ["FOURNISSEUR", "OLD_DAYS", "NEW_DAYS", "TURNOVER_EUR", "DIVISION", "CONDITION_PAIEMENT", "DELAI_PAIEMENT"], loading_placeholder)
-    df_contracts = load_data("contracts", ["CONTRAT", "FOURNISSEUR", "DATE_EXPIRATION", "MONTANT_MAD", "RESPONSABLE_EMAIL"], loading_placeholder)
+    loading_placeholder.write("Chargement de la table purchase_orders...")
+    df_po, error_po = load_data("purchase_orders", ["PO_NUMBER", "FOURNISSEUR", "DEPARTEMENT", "MONTANT_EUR", "QUANTITE", "DATE", "TYPE_ACHAT", "STATUT"])
+    if error_po:
+        loading_placeholder.error(error_po)
+        st.stop()
+    loading_placeholder.write("Colonnes trouvées dans purchase_orders: " + str(df_po.columns.tolist()))
+
+    loading_placeholder.write("Chargement de la table payment_terms...")
+    df_pt, error_pt = load_data("payment_terms", ["FOURNISSEUR", "OLD_DAYS", "NEW_DAYS", "TURNOVER_EUR", "DIVISION", "CONDITION_PAIEMENT", "DELAI_PAIEMENT"])
+    if error_pt:
+        loading_placeholder.error(error_pt)
+        st.stop()
+    loading_placeholder.write("Colonnes trouvées dans payment_terms: " + str(df_pt.columns.tolist()))
+
+    loading_placeholder.write("Chargement de la table contracts...")
+    df_contracts, error_contracts = load_data("contracts", ["CONTRAT", "FOURNISSEUR", "DATE_EXPIRATION", "MONTANT_MAD", "RESPONSABLE_EMAIL"])
+    if error_contracts:
+        loading_placeholder.error(error_contracts)
+        st.stop()
+    loading_placeholder.write("Colonnes trouvées dans contracts: " + str(df_contracts.columns.tolist()))
 
     # Clear the loading placeholder
     loading_placeholder.empty()
@@ -607,7 +636,7 @@ with st.spinner(t["loading"]):
 
 st.success(t["data_loaded"])
 
-# Résumé global
+# Global summary
 st.markdown('<div class="section">', unsafe_allow_html=True)
 st.subheader(t["summary"])
 col_sum1, col_sum2, col_sum3 = st.columns(3)
@@ -622,7 +651,7 @@ with col_sum3:
     st.metric(t["total_turnover"], f"{total_turnover:,.2f} EUR")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Barre latérale
+# Sidebar
 with st.sidebar:
     st.header(t["filters_alerts"])
     
@@ -698,7 +727,7 @@ with st.sidebar:
     if not alerts_displayed:
         st.info(t["no_alerts"])
 
-    if st.button(t["check_alerts"], key="check_alerts_btn"):
+    if smtp_available and st.button(t["check_alerts"], key="check_alerts_btn"):
         notifications_sent = check_alerts(df_contracts_filtered, df_po_filtered, df_pt_filtered)
         if notifications_sent > 0:
             st.success(f"{notifications_sent} {t['alerts'].lower()}(s) sent.")
@@ -708,27 +737,7 @@ with st.sidebar:
     st.subheader(t["help"])
     st.write(t["help_text"])
 
-# Initialisation de SQLite pour commentaires
-@st.cache_resource
-def get_sqlite_connection():
-    conn = sqlite3.connect('comments.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS comments (
-            id TEXT,
-            type TEXT,
-            comment TEXT,
-            user TEXT,
-            timestamp TEXT
-        )
-    ''')
-    conn.commit()
-    return conn
-
-conn = get_sqlite_connection()
-cursor = conn.cursor()
-
-# Onglets principaux
+# Main tabs
 tab1, tab2, tab3 = st.tabs([t["po_tab"], t["pt_tab"], t["contract_tab"]])
 
 with tab1:
@@ -813,13 +822,13 @@ with tab1:
                     fig_predict = px.line(df_predict, x="DATE", y="MONTANT_EUR", title=f"{t['forecast']} pour {selected_option}", color_discrete_sequence=color_schemes[color_scheme])
                     st.plotly_chart(fig_predict, use_container_width=True)
                 else:
-                    X = df_predict[["time_index"]]
+                    X = df_predict[["time_index"]]  # Keep as DataFrame
                     y = df_predict["MONTANT_EUR"]
                     model = LinearRegression()
                     model.fit(X, y)
                     future_dates = pd.date_range(start=df_predict["DATE"].max() + pd.offsets.MonthBegin(1), periods=6, freq="MS")
-                    future_time_index = [(date - df_predict["DATE"].min()).days for date in future_dates]
-                    future_predictions = model.predict(np.array(future_time_index).reshape(-1, 1))
+                    future_time_index = pd.DataFrame([(date - df_predict["DATE"].min()).days for date in future_dates], columns=["time_index"])
+                    future_predictions = model.predict(future_time_index)
                     fig_predict = px.line(df_predict, x="DATE", y="MONTANT_EUR", title=f"{t['forecast']} pour {selected_option}", color_discrete_sequence=color_schemes[color_scheme])
                     fig_predict.add_scatter(x=future_dates, y=future_predictions, mode="lines+markers", name="Prévision", line=dict(dash="dash"))
                     st.plotly_chart(fig_predict, use_container_width=True)
@@ -879,12 +888,20 @@ with tab1:
         user = st.text_input(t["comment_user"], key="comment_user")
         if st.button(t["add_comment"], key="add_comment_po"):
             if comment and user and selected_po:
-                cursor.execute("INSERT INTO comments (id, type, comment, user, timestamp) VALUES (?, ?, ?, ?, ?)", 
-                               (selected_po, "PO", comment, user, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-                conn.commit()
-                st.success("Commentaire ajouté !")
-        comments_df = pd.read_sql_query(f"SELECT * FROM comments WHERE id = '{selected_po}' AND type = 'PO'", conn)
-        st.dataframe(comments_df[["comment", "user", "timestamp"]], use_container_width=True)
+                conn, cursor = get_sqlite_connection()
+                try:
+                    cursor.execute("INSERT INTO comments (id, type, comment, user, timestamp) VALUES (?, ?, ?, ?, ?)", 
+                                   (selected_po, "PO", comment, user, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                    conn.commit()
+                    st.success("Commentaire ajouté !")
+                finally:
+                    conn.close()
+        conn, cursor = get_sqlite_connection()
+        try:
+            comments_df = pd.read_sql_query("SELECT * FROM comments WHERE id = ? AND type = ?", conn, params=(selected_po, "PO"))
+            st.dataframe(comments_df[["comment", "user", "timestamp"]], use_container_width=True)
+        finally:
+            conn.close()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -978,7 +995,7 @@ with tab3:
         grid_options = gb.build()
         AgGrid(df_contracts_filtered, gridOptions=grid_options, height=200, width='100%', fit_columns_on_grid_load=True)
 
-        if st.button(t["send_contract_reminders"], key="send_contract_reminders"):
+        if smtp_available and st.button(t["send_contract_reminders"], key="send_contract_reminders"):
             notifications_sent = 0
             for _, row in df_contracts_filtered.iterrows():
                 days_left = (row["DATE_EXPIRATION"] - pd.Timestamp.now()).days
@@ -989,8 +1006,8 @@ with tab3:
                         notifications_sent += 1
             if notifications_sent > 0:
                 st.success(f"{notifications_sent} rappel(s) envoyé(s).")
-            else:
-                st.info("Aucun rappel à envoyer.")
+        else:
+            st.info("Aucun rappel à envoyer.")
 
         st.subheader(t["comments"])
         selected_contract = st.text_input("CONTRAT", key="comment_contract_number")
@@ -998,12 +1015,20 @@ with tab3:
         user = st.text_input(t["comment_user"], key="comment_user_contract")
         if st.button(t["add_comment"], key="add_comment_contract"):
             if comment and user and selected_contract:
-                cursor.execute("INSERT INTO comments (id, type, comment, user, timestamp) VALUES (?, ?, ?, ?, ?)", 
-                               (selected_contract, "Contract", comment, user, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-                conn.commit()
-                st.success("Commentaire ajouté !")
-        comments_df = pd.read_sql_query(f"SELECT * FROM comments WHERE id = '{selected_contract}' AND type = 'Contract'", conn)
-        st.dataframe(comments_df[["comment", "user", "timestamp"]], use_container_width=True)
+                conn, cursor = get_sqlite_connection()
+                try:
+                    cursor.execute("INSERT INTO comments (id, type, comment, user, timestamp) VALUES (?, ?, ?, ?, ?)", 
+                                   (selected_contract, "Contract", comment, user, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                    conn.commit()
+                    st.success("Commentaire ajouté !")
+                finally:
+                    conn.close()
+        conn, cursor = get_sqlite_connection()
+        try:
+            comments_df = pd.read_sql_query("SELECT * FROM comments WHERE id = ? AND type = ?", conn, params=(selected_contract, "Contract"))
+            st.dataframe(comments_df[["comment", "user", "timestamp"]], use_container_width=True)
+        finally:
+            conn.close()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1022,9 +1047,6 @@ if st.button(t["export_ppt"], key="export_ppt_btn"):
                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation", key="download_ppt")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Fermer connexion SQLite
-conn.close()
-
-# Pied de page
+# Footer
 st.markdown("---")
 st.markdown(f"{t['footer']} {datetime.now().strftime('%d/%m/%Y %H:%M')}")
